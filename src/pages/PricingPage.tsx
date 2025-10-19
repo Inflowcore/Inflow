@@ -75,10 +75,6 @@ export default function PricingPage() {
                 <span className="text-5xl font-black text-gray-900">$59.99</span>
                 <span className="text-gray-600 ml-2">/month</span>
               </div>
-              <div className="flex items-baseline">
-                <span className="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent">$47.99</span>
-                <span className="text-gray-600 ml-2">/month billed yearly</span>
-              </div>
             </div>
 
             <ul className="space-y-4 mb-8">
@@ -116,11 +112,6 @@ export default function PricingPage() {
                 <span className="text-5xl font-black text-gray-900">$74.99</span>
                 <span className="text-gray-600 ml-2">/month</span>
               </div>
-              <div className="flex items-baseline">
-                <span className="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent">$59.99</span>
-                <span className="text-gray-600 ml-2">/month billed yearly</span>
-              </div>
-              <p className="text-sm bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent mt-2 font-semibold">Save 20% with yearly billing</p>
             </div>
 
             <ul className="space-y-4 mb-8">
