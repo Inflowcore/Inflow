@@ -10,6 +10,20 @@ VITE_SUPABASE_ANON_KEY=your-anon-public-key
 VITE_APP_ORIGIN=https://inflowcore.netlify.app
 ```
 
+## Supabase Edge Function Secrets
+
+The Stripe integration requires environment variables to be set as secrets in your Supabase project:
+
+1. Go to your Supabase project dashboard
+2. Navigate to **Edge Functions** → **Secrets**
+3. Add the following secrets:
+   - `SUPABASE_URL`: Your Supabase project URL (e.g., `https://your-project-ref.supabase.co`)
+   - `SUPABASE_SERVICE_ROLE_KEY`: Your service role key (found in Project Settings → API)
+   - `STRIPE_SECRET_KEY`: Your Stripe secret key
+   - `STRIPE_WEBHOOK_SECRET`: Your Stripe webhook endpoint secret
+
+**Important**: Without these secrets, the Edge Functions will fail to connect to the database and Stripe API.
+
 ## Deployment Checklist
 
 ### Netlify Environment Variables
