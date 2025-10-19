@@ -23,68 +23,73 @@ const stripe = new Stripe(stripeSecret || '', {
 
 const supabase = createClient(supabaseUrl || '', supabaseServiceKey || '');
 
-// Helper function to create responses with CORS headers
-function corsResponse(body: string | object | null, status = 200) {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  };
-
-  // For 204 No Content, don't include Content-Type or body
-  if (status === 204) {
-    return new Response(null, { status, headers });
-  }
-
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      ...headers,
-      'Content-Type': 'application/json',
-    },
-  });
-}
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
 
 Deno.serve(async (req) => {
   try {
     if (req.method === 'OPTIONS') {
-      return corsResponse(null, 204);
+      return new Response(null, { 
+        status: 204,
+        headers: corsHeaders
+      });
     }
 
     if (req.method !== 'POST') {
-      return corsResponse({ error: 'Method not allowed' }, 405);
+      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+        status: 405,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Check if required environment variables are available
+    // Check environment variables
     if (!stripeSecret) {
       console.error('STRIPE_SECRET_KEY is missing');
-      return corsResponse({ error: 'Stripe configuration missing' }, 500);
+      return new Response(JSON.stringify({ error: 'Stripe configuration missing' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     if (!supabaseUrl || !supabaseServiceKey) {
       console.error('Supabase configuration missing');
-      return corsResponse({ error: 'Database configuration missing' }, 500);
+      return new Response(JSON.stringify({ error: 'Database configuration missing' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    const { price_id, success_url, cancel_url, mode } = await req.json();
+    const { price_id, success_url, cancel_url, mode = 'subscription' } = await req.json();
 
     // Validate required parameters
-    if (!price_id || !success_url || !cancel_url || !mode) {
-      return corsResponse({ 
-        error: 'Missing required parameters: price_id, success_url, cancel_url, mode' 
-      }, 400);
+    if (!price_id || !success_url || !cancel_url) {
+      return new Response(JSON.stringify({ 
+        error: 'Missing required parameters: price_id, success_url, cancel_url' 
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     if (mode !== 'subscription' && mode !== 'payment') {
-      return corsResponse({ 
+      return new Response(JSON.stringify({ 
         error: 'Invalid mode. Must be "subscription" or "payment"' 
-      }, 400);
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     // Get user from authorization header
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
-      return corsResponse({ error: 'Authorization header missing' }, 401);
+      return new Response(JSON.stringify({ error: 'Authorization header missing' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const token = authHeader.replace('Bearer ', '');
@@ -95,11 +100,17 @@ Deno.serve(async (req) => {
 
     if (getUserError) {
       console.error('Failed to authenticate user:', getUserError);
-      return corsResponse({ error: 'Failed to authenticate user' }, 401);
+      return new Response(JSON.stringify({ error: 'Failed to authenticate user' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     if (!user) {
-      return corsResponse({ error: 'User not found' }, 404);
+      return new Response(JSON.stringify({ error: 'User not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     console.log(`Processing checkout for user: ${user.id}, price: ${price_id}`);
@@ -107,17 +118,21 @@ Deno.serve(async (req) => {
     // Check if customer already exists
     const { data: existingCustomer, error: getCustomerError } = await supabase
       .from('stripe_customers')
-      .select('customer_id')
+      .select('id, customer_id')
       .eq('user_id', user.id)
       .is('deleted_at', null)
       .maybeSingle();
 
     if (getCustomerError) {
       console.error('Failed to fetch customer information:', getCustomerError);
-      return corsResponse({ error: 'Failed to fetch customer information' }, 500);
+      return new Response(JSON.stringify({ error: 'Failed to fetch customer information' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     let customerId: string;
+    let customerRecordId: string;
 
     if (!existingCustomer || !existingCustomer.customer_id) {
       // Create new Stripe customer
@@ -132,12 +147,16 @@ Deno.serve(async (req) => {
         console.log(`Created new Stripe customer ${newCustomer.id} for user ${user.id}`);
 
         // Save customer mapping to database
-        const { error: createCustomerError } = await supabase.from('stripe_customers').insert({
-          user_id: user.id,
-          customer_id: newCustomer.id,
-        });
+        const { data: customerRecord, error: createCustomerError } = await supabase
+          .from('stripe_customers')
+          .insert({
+            user_id: user.id,
+            customer_id: newCustomer.id,
+          })
+          .select('id, customer_id')
+          .single();
 
-        if (createCustomerError) {
+        if (createCustomerError || !customerRecord) {
           console.error('Failed to save customer information:', createCustomerError);
           
           // Clean up Stripe customer if database insert fails
@@ -147,66 +166,25 @@ Deno.serve(async (req) => {
             console.error('Failed to clean up Stripe customer:', deleteError);
           }
 
-          return corsResponse({ error: 'Failed to create customer mapping' }, 500);
+          return new Response(JSON.stringify({ error: 'Failed to create customer mapping' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
         }
 
         customerId = newCustomer.id;
-
-        // Create subscription record for subscription mode
-        if (mode === 'subscription') {
-          const { error: createSubscriptionError } = await supabase.from('stripe_subscriptions').insert({
-            customer_id: customerId,
-            status: 'not_started',
-          });
-
-          if (createSubscriptionError) {
-            console.error('Failed to create subscription record:', createSubscriptionError);
-            
-            // Clean up customer if subscription creation fails
-            try {
-              await stripe.customers.del(customerId);
-              await supabase.from('stripe_customers').delete().eq('customer_id', customerId);
-            } catch (cleanupError) {
-              console.error('Failed to clean up after subscription creation error:', cleanupError);
-            }
-
-            return corsResponse({ error: 'Failed to create subscription record' }, 500);
-          }
-        }
+        customerRecordId = customerRecord.id;
 
       } catch (stripeError) {
         console.error('Failed to create Stripe customer:', stripeError);
-        return corsResponse({ error: 'Failed to create customer' }, 500);
+        return new Response(JSON.stringify({ error: 'Failed to create customer' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
     } else {
       customerId = existingCustomer.customer_id;
-
-      // For subscription mode, ensure subscription record exists
-      if (mode === 'subscription') {
-        const { data: existingSubscription, error: getSubscriptionError } = await supabase
-          .from('stripe_subscriptions')
-          .select('status')
-          .eq('customer_id', customerId)
-          .maybeSingle();
-
-        if (getSubscriptionError) {
-          console.error('Failed to fetch subscription information:', getSubscriptionError);
-          return corsResponse({ error: 'Failed to fetch subscription information' }, 500);
-        }
-
-        if (!existingSubscription) {
-          // Create subscription record for existing customer
-          const { error: createSubscriptionError } = await supabase.from('stripe_subscriptions').insert({
-            customer_id: customerId,
-            status: 'not_started',
-          });
-
-          if (createSubscriptionError) {
-            console.error('Failed to create subscription record for existing customer:', createSubscriptionError);
-            return corsResponse({ error: 'Failed to create subscription record' }, 500);
-          }
-        }
-      }
+      customerRecordId = existingCustomer.id;
     }
 
     // Create Stripe checkout session
@@ -223,12 +201,20 @@ Deno.serve(async (req) => {
         mode: mode as 'subscription' | 'payment',
         success_url,
         cancel_url,
+        metadata: {
+          user_id: user.id,
+          customer_record_id: customerRecordId,
+        },
       };
 
       // Add trial period for subscriptions
       if (mode === 'subscription') {
         sessionParams.subscription_data = {
           trial_period_days: 7,
+          metadata: {
+            user_id: user.id,
+            customer_record_id: customerRecordId,
+          },
         };
       }
 
@@ -236,19 +222,27 @@ Deno.serve(async (req) => {
 
       console.log(`Created checkout session ${session.id} for customer ${customerId}`);
 
-      return corsResponse({ 
+      return new Response(JSON.stringify({ 
         sessionId: session.id, 
         url: session.url,
         customer_id: customerId 
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
 
     } catch (stripeError) {
       console.error('Failed to create checkout session:', stripeError);
-      return corsResponse({ error: 'Failed to create checkout session' }, 500);
+      return new Response(JSON.stringify({ error: 'Failed to create checkout session' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
   } catch (error: any) {
     console.error('Checkout error:', error);
-    return corsResponse({ error: error.message || 'Internal server error' }, 500);
+    return new Response(JSON.stringify({ error: error.message || 'Internal server error' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });

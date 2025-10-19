@@ -32,10 +32,30 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
 
   const fetchSubscription = async () => {
     try {
+      // First get the customer record
+      const { data: customerData, error: customerError } = await supabase
+        .from('stripe_customers')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (customerError) {
+        console.error('Error fetching customer:', customerError);
+        return;
+      }
+
+      if (!customerData) {
+        // No customer record yet
+        return;
+      }
+
+      // Then get the subscription
       const { data, error } = await supabase
         .from('stripe_subscriptions')
         .select('*')
-        .eq('customer_id', (await supabase.from('stripe_customers').select('id').eq('user_id', user.id).single()).data?.id)
+        .eq('customer_id', customerData.id)
+        .in('status', ['active', 'trialing', 'past_due'])
+        .order('created_at', { ascending: false })
         .maybeSingle();
 
       if (error) {

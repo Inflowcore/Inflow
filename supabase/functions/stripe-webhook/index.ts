@@ -24,17 +24,19 @@ const stripe = new Stripe(stripeSecret || '', {
 
 const supabase = createClient(supabaseUrl || '', supabaseServiceKey || '');
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'stripe-signature, content-type',
+};
+
 Deno.serve(async (req) => {
   try {
     // Handle OPTIONS request for CORS preflight
     if (req.method === 'OPTIONS') {
       return new Response(null, { 
         status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'stripe-signature, content-type',
-        }
+        headers: corsHeaders
       });
     }
 
@@ -87,21 +89,7 @@ Deno.serve(async (req) => {
 
 async function handleEvent(event: Stripe.Event) {
   try {
-    const stripeData = event?.data?.object ?? {};
-
-    if (!stripeData || !('customer' in stripeData)) {
-      console.log('No customer data in event, skipping');
-      return;
-    }
-
-    const { customer: customerId } = stripeData;
-
-    if (!customerId || typeof customerId !== 'string') {
-      console.error(`Invalid customer ID in event: ${JSON.stringify(event)}`);
-      return;
-    }
-
-    console.log(`Processing event ${event.type} for customer: ${customerId}`);
+    console.log(`Handling event: ${event.type}`);
 
     switch (event.type) {
       case 'checkout.session.completed':
@@ -109,14 +97,23 @@ async function handleEvent(event: Stripe.Event) {
         break;
       
       case 'customer.subscription.created':
+        await handleSubscriptionCreated(event.data.object as Stripe.Subscription);
+        break;
+        
       case 'customer.subscription.updated':
+        await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
+        break;
+        
       case 'customer.subscription.deleted':
-        await syncCustomerFromStripe(customerId);
+        await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
         break;
       
       case 'invoice.payment_succeeded':
+        await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+        break;
+        
       case 'invoice.payment_failed':
-        await syncCustomerFromStripe(customerId);
+        await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
         break;
       
       default:
@@ -130,7 +127,7 @@ async function handleEvent(event: Stripe.Event) {
 
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   try {
-    const { customer, mode, payment_status } = session;
+    const { customer, mode, payment_status, subscription } = session;
 
     if (!customer || typeof customer !== 'string') {
       console.error('Invalid customer in checkout session');
@@ -139,9 +136,21 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
     console.log(`Checkout completed for customer ${customer}, mode: ${mode}`);
 
-    if (mode === 'subscription') {
-      // For subscriptions, sync the customer data
-      await syncCustomerFromStripe(customer);
+    // Get customer record from database
+    const { data: customerRecord, error: getCustomerError } = await supabase
+      .from('stripe_customers')
+      .select('id, user_id')
+      .eq('customer_id', customer)
+      .single();
+
+    if (getCustomerError || !customerRecord) {
+      console.error('Failed to find customer record:', getCustomerError);
+      return;
+    }
+
+    if (mode === 'subscription' && subscription) {
+      // For subscriptions, the subscription.created event will handle the database update
+      console.log(`Subscription checkout completed: ${subscription}`);
     } else if (mode === 'payment' && payment_status === 'paid') {
       // For one-time payments, create order record
       const {
@@ -153,9 +162,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       } = session;
 
       const { error: orderError } = await supabase.from('stripe_orders').insert({
+        customer_id: customerRecord.id,
         checkout_session_id,
         payment_intent_id: typeof payment_intent === 'string' ? payment_intent : null,
-        customer_id: customer,
         amount: amount_total || 0,
         currency: currency || 'eur',
         status: 'paid',
@@ -174,85 +183,153 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 }
 
-async function syncCustomerFromStripe(customerId: string) {
+async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
   try {
-    console.log(`Syncing customer data for: ${customerId}`);
+    console.log(`Subscription created: ${subscription.id}`);
+    await upsertSubscription(subscription);
+  } catch (error) {
+    console.error('Error handling subscription created:', error);
+  }
+}
 
-    // Fetch latest subscription data from Stripe
-    const subscriptions = await stripe.subscriptions.list({
-      customer: customerId,
-      limit: 1,
-      status: 'all',
-      expand: ['data.default_payment_method'],
-    });
+async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
+  try {
+    console.log(`Subscription updated: ${subscription.id}`);
+    await upsertSubscription(subscription);
+  } catch (error) {
+    console.error('Error handling subscription updated:', error);
+  }
+}
 
-    if (subscriptions.data.length === 0) {
-      console.log(`No subscriptions found for customer: ${customerId}`);
-      
-      // Update subscription status to indicate no active subscription
-      const { error: noSubError } = await supabase.from('stripe_subscriptions').upsert(
-        {
-          customer_id: customerId,
-          status: 'canceled',
+async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+  try {
+    console.log(`Subscription deleted: ${subscription.id}`);
+    
+    // Mark subscription as deleted
+    const { error } = await supabase
+      .from('stripe_subscriptions')
+      .update({
+        status: 'canceled',
+        canceled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('subscription_id', subscription.id);
+
+    if (error) {
+      console.error('Error marking subscription as deleted:', error);
+    } else {
+      console.log(`Marked subscription ${subscription.id} as canceled`);
+    }
+  } catch (error) {
+    console.error('Error handling subscription deleted:', error);
+  }
+}
+
+async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
+  try {
+    console.log(`Invoice payment succeeded: ${invoice.id}`);
+    
+    if (invoice.subscription && typeof invoice.subscription === 'string') {
+      // Update subscription status if needed
+      const { error } = await supabase
+        .from('stripe_subscriptions')
+        .update({
+          status: 'active',
           updated_at: new Date().toISOString(),
-        },
-        {
-          onConflict: 'customer_id',
-        },
-      );
+        })
+        .eq('subscription_id', invoice.subscription)
+        .eq('status', 'past_due');
 
-      if (noSubError) {
-        console.error('Error updating subscription status:', noSubError);
+      if (error) {
+        console.error('Error updating subscription after successful payment:', error);
       }
+    }
+  } catch (error) {
+    console.error('Error handling invoice payment succeeded:', error);
+  }
+}
+
+async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
+  try {
+    console.log(`Invoice payment failed: ${invoice.id}`);
+    
+    if (invoice.subscription && typeof invoice.subscription === 'string') {
+      // Update subscription status to past_due
+      const { error } = await supabase
+        .from('stripe_subscriptions')
+        .update({
+          status: 'past_due',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('subscription_id', invoice.subscription);
+
+      if (error) {
+        console.error('Error updating subscription after failed payment:', error);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling invoice payment failed:', error);
+  }
+}
+
+async function upsertSubscription(subscription: Stripe.Subscription) {
+  try {
+    const customerId = subscription.customer as string;
+    
+    // Get customer record from database
+    const { data: customerRecord, error: getCustomerError } = await supabase
+      .from('stripe_customers')
+      .select('id, user_id')
+      .eq('customer_id', customerId)
+      .single();
+
+    if (getCustomerError || !customerRecord) {
+      console.error('Failed to find customer record for subscription:', getCustomerError);
       return;
     }
 
-    // Get the most recent subscription
-    const subscription = subscriptions.data[0];
-
     // Prepare subscription data
-    const subscriptionData: any = {
-      customer_id: customerId,
+    const subscriptionData = {
+      customer_id: customerRecord.id,
       subscription_id: subscription.id,
       price_id: subscription.items.data[0]?.price?.id || null,
-      current_period_start: subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
-      current_period_end: subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null,
+      status: subscription.status as any,
+      current_period_start: subscription.current_period_start 
+        ? new Date(subscription.current_period_start * 1000).toISOString() 
+        : null,
+      current_period_end: subscription.current_period_end 
+        ? new Date(subscription.current_period_end * 1000).toISOString() 
+        : null,
       cancel_at_period_end: subscription.cancel_at_period_end,
-      canceled_at: subscription.canceled_at ? new Date(subscription.canceled_at * 1000).toISOString() : null,
-      trial_start: subscription.trial_start ? new Date(subscription.trial_start * 1000).toISOString() : null,
-      trial_end: subscription.trial_end ? new Date(subscription.trial_end * 1000).toISOString() : null,
-      status: subscription.status,
+      canceled_at: subscription.canceled_at 
+        ? new Date(subscription.canceled_at * 1000).toISOString() 
+        : null,
+      trial_start: subscription.trial_start 
+        ? new Date(subscription.trial_start * 1000).toISOString() 
+        : null,
+      trial_end: subscription.trial_end 
+        ? new Date(subscription.trial_end * 1000).toISOString() 
+        : null,
+      metadata: subscription.metadata || {},
       updated_at: new Date().toISOString(),
     };
 
-    // Add payment method info if available
-    if (subscription.default_payment_method && typeof subscription.default_payment_method !== 'string') {
-      const paymentMethod = subscription.default_payment_method as Stripe.PaymentMethod;
-      if (paymentMethod.card) {
-        subscriptionData.metadata = {
-          payment_method_brand: paymentMethod.card.brand,
-          payment_method_last4: paymentMethod.card.last4,
-        };
-      }
-    }
-
     // Upsert subscription data
-    const { error: subError } = await supabase.from('stripe_subscriptions').upsert(
-      subscriptionData,
-      {
-        onConflict: 'customer_id',
-      },
-    );
+    const { error: upsertError } = await supabase
+      .from('stripe_subscriptions')
+      .upsert(subscriptionData, {
+        onConflict: 'subscription_id',
+      });
 
-    if (subError) {
-      console.error('Error syncing subscription:', subError);
+    if (upsertError) {
+      console.error('Error upserting subscription:', upsertError);
       throw new Error('Failed to sync subscription in database');
     }
 
-    console.log(`Successfully synced subscription for customer: ${customerId}`);
+    console.log(`Successfully synced subscription: ${subscription.id}`);
 
   } catch (error) {
-    console.error(`Failed to sync subscription for customer ${customerId}:`, error);
+    console.error(`Failed to upsert subscription ${subscription.id}:`, error);
     throw error;
   }
 }
