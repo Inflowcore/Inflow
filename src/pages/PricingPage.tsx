@@ -1,74 +1,99 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabaseClient';
-import { stripeProducts } from '../stripe-config';
-import { Check, Zap, Crown, Sparkles } from 'lucide-react';
+import { getStandardPlan, getPremiumPlan } from '../stripe-config';
+import { Check, Zap, Crown, Sparkles, Loader2 } from 'lucide-react';
 
 export default function PricingPage() {
   const { user } = useAuth();
   const [loading, setLoading] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string>('');
 
-  const handleStartFreeTrial = async (priceId: string) => {
-    if (user) {
-      setLoading(priceId);
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          window.location.href = '/login';
-          return;
-        }
+  const standardPlan = getStandardPlan();
+  const premiumPlan = getPremiumPlan();
 
-        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-checkout`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            price_id: priceId,
-            success_url: `${window.location.origin}/success`,
-            cancel_url: `${window.location.origin}/#pricing`,
-            mode: 'subscription'
-          }),
-        });
+  const handleStartFreeTrial = async (priceId: string, planName: string) => {
+    if (!priceId) {
+      setError('Invalid plan configuration. Please contact support.');
+      return;
+    }
 
-        const data = await response.json();
-        
-        if (data.url) {
-          window.location.href = data.url;
-        } else {
-          throw new Error(data.error || 'Failed to create checkout session');
-        }
-      } catch (error) {
-        console.error('Checkout error:', error);
-        alert('Failed to start checkout. Please try again.');
-      } finally {
-        setLoading(null);
-      }
-    } else {
+    if (!user) {
       window.location.href = '/login';
+      return;
+    }
+
+    setLoading(priceId);
+    setError('');
+
+    try {
+      // Get current session
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        console.error('Session error:', sessionError);
+        window.location.href = '/login';
+        return;
+      }
+
+      // Create checkout session
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (!supabaseUrl) {
+        throw new Error('Supabase configuration missing');
+      }
+
+      const response = await fetch(`${supabaseUrl}/functions/v1/stripe-checkout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          price_id: priceId,
+          success_url: `${window.location.origin}/success`,
+          cancel_url: `${window.location.origin}/#pricing`,
+          mode: 'subscription'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Checkout response error:', response.status, errorText);
+        throw new Error(`Failed to create checkout session: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      if (data.url) {
+        // Redirect to Stripe checkout
+        window.location.href = data.url;
+      } else {
+        throw new Error('No checkout URL received');
+      }
+
+    } catch (error) {
+      console.error('Checkout error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to start checkout';
+      setError(`Failed to start checkout for ${planName}. ${errorMessage}`);
+    } finally {
+      setLoading(null);
     }
   };
 
-  const standardProduct = stripeProducts.find(p => p.name === 'Inflow Standard Plan');
-  const premiumProduct = stripeProducts.find(p => p.name === 'Inflow Premium Plan');
-
-  const standardFeatures = [
-    'All the Tools to Capture More Leads',
-    'Nurture & Close Leads into Customers',
-    'Full Online Booking, Pipelines, Social Cal, Website Builder, and More!',
-    'Unlimited Contacts & Users, Add as Many Contacts & Users as You Need!',
-    'Setup Up To Three Sub-Accounts',
-    '7-day free trial'
-  ];
-
-  const premiumFeatures = [
-    'Everything In Starter Plan',
-    'Api Access - Integrate with Anything',
-    'Unlimited Sub-Accounts - As Many Client Accounts as You Need for One Price!',
-    'A Complete Control Over the Looks and Feel of the Platform!',
-    '7-day free trial'
-  ];
+  if (!standardPlan || !premiumPlan) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Configuration Error</h2>
+          <p className="text-gray-600">Pricing plans are not properly configured. Please contact support.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-white">
@@ -100,6 +125,16 @@ export default function PricingPage() {
       </section>
 
       <div className="container mx-auto px-6 py-20">
+        {/* Error Message */}
+        {error && (
+          <div className="max-w-5xl mx-auto mb-8">
+            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-red-700">
+              <p className="font-medium">Payment Error</p>
+              <p className="text-sm mt-1">{error}</p>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl mx-auto">
           {/* Standard Plan */}
           <div className="bg-white rounded-3xl p-8 border border-gray-100 relative shadow-lg hover:shadow-xl transition-all duration-300 hover-lift">
@@ -110,26 +145,34 @@ export default function PricingPage() {
 
             <div className="mb-8">
               <div className="flex items-baseline mb-2">
-                <span className="text-5xl font-black text-gray-900">{standardProduct?.currencySymbol}{standardProduct?.price}</span>
+                <span className="text-5xl font-black text-gray-900">{standardPlan.currencySymbol}{standardPlan.price}</span>
                 <span className="text-gray-600 ml-2">/month</span>
               </div>
+              <p className="text-gray-600 text-sm">{standardPlan.description}</p>
             </div>
 
             <ul className="space-y-4 mb-8">
-              {standardFeatures.map((feature, index) => (
-                <li key={index} className="flex items-center">
-                  <Check className="w-5 h-5 text-green-400 mr-3 flex-shrink-0" />
+              {standardPlan.features.map((feature, index) => (
+                <li key={index} className="flex items-start">
+                  <Check className="w-5 h-5 text-green-400 mr-3 flex-shrink-0 mt-0.5" />
                   <span className="text-gray-700">{feature}</span>
                 </li>
               ))}
             </ul>
 
             <button
-              onClick={() => handleStartFreeTrial(standardProduct?.priceId || '')}
-              disabled={loading === standardProduct?.priceId}
-              className="w-full bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-pink-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              onClick={() => handleStartFreeTrial(standardPlan.priceId, standardPlan.name)}
+              disabled={loading === standardPlan.priceId}
+              className="w-full bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-pink-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center"
             >
-              {loading === standardProduct?.priceId ? 'Loading...' : 'Start Free Trial'}
+              {loading === standardPlan.priceId ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                'Start Free Trial'
+              )}
             </button>
           </div>
 
@@ -148,26 +191,34 @@ export default function PricingPage() {
 
             <div className="mb-8">
               <div className="flex items-baseline mb-2">
-                <span className="text-5xl font-black text-gray-900">{premiumProduct?.currencySymbol}{premiumProduct?.price}</span>
+                <span className="text-5xl font-black text-gray-900">{premiumPlan.currencySymbol}{premiumPlan.price}</span>
                 <span className="text-gray-600 ml-2">/month</span>
               </div>
+              <p className="text-gray-600 text-sm">{premiumPlan.description}</p>
             </div>
 
             <ul className="space-y-4 mb-8">
-              {premiumFeatures.map((feature, index) => (
-                <li key={index} className="flex items-center">
-                  <Check className="w-5 h-5 text-green-400 mr-3 flex-shrink-0" />
+              {premiumPlan.features.map((feature, index) => (
+                <li key={index} className="flex items-start">
+                  <Check className="w-5 h-5 text-green-400 mr-3 flex-shrink-0 mt-0.5" />
                   <span className="text-gray-700">{feature}</span>
                 </li>
               ))}
             </ul>
 
             <button
-              onClick={() => handleStartFreeTrial(premiumProduct?.priceId || '')}
-              disabled={loading === premiumProduct?.priceId}
-              className="w-full bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-xl hover:shadow-pink-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              onClick={() => handleStartFreeTrial(premiumPlan.priceId, premiumPlan.name)}
+              disabled={loading === premiumPlan.priceId}
+              className="w-full bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white py-4 rounded-2xl font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-xl hover:shadow-pink-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center"
             >
-              {loading === premiumProduct?.priceId ? 'Loading...' : 'Start Free Trial'}
+              {loading === premiumPlan.priceId ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                'Start Free Trial'
+              )}
             </button>
           </div>
         </div>

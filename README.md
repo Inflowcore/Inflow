@@ -24,6 +24,39 @@ The Stripe integration requires environment variables to be set as secrets in yo
 
 **Important**: Without these secrets, the Edge Functions will fail to connect to the database and Stripe API.
 
+## Stripe Configuration
+
+### 1. Create Products and Prices in Stripe Dashboard
+
+You need to create the following products and prices in your Stripe dashboard:
+
+**Standard Plan:**
+- Product Name: `Inflow Standard Plan`
+- Price: €59.99/month (recurring)
+- Copy the Price ID and replace `price_standard_monthly` in `src/stripe-config.ts`
+
+**Premium Plan:**
+- Product Name: `Inflow Premium Plan`
+- Price: €74.99/month (recurring)
+- Copy the Price ID and replace `price_premium_monthly` in `src/stripe-config.ts`
+
+### 2. Set up Webhook Endpoint
+
+1. In Stripe Dashboard, go to **Developers** → **Webhooks**
+2. Add endpoint: `https://your-project-ref.supabase.co/functions/v1/stripe-webhook`
+3. Select these events:
+   - `checkout.session.completed`
+   - `customer.subscription.created`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_succeeded`
+   - `invoice.payment_failed`
+4. Copy the webhook signing secret and add it as `STRIPE_WEBHOOK_SECRET` in Supabase Edge Function secrets
+
+### 3. Update Price IDs
+
+After creating products in Stripe, update the `priceId` values in `src/stripe-config.ts` with your actual Stripe Price IDs.
+
 ## Deployment Checklist
 
 ### Netlify Environment Variables
