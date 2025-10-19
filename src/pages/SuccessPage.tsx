@@ -18,8 +18,9 @@ export default function SuccessPage() {
   const fetchSubscription = async () => {
     try {
       const { data, error } = await supabase
-        .from('stripe_user_subscriptions')
+        .from('stripe_subscriptions')
         .select('*')
+        .eq('customer_id', (await supabase.from('stripe_customers').select('id').eq('user_id', user.id).single()).data?.id)
         .maybeSingle();
 
       if (error) {
@@ -95,7 +96,7 @@ export default function SuccessPage() {
                   <span className="font-semibold">Plan:</span> {getProductName()}
                 </p>
                 <p className="text-gray-600">
-                  <span className="font-semibold">Status:</span> {subscription.subscription_status === 'active' ? 'Active' : subscription.subscription_status}
+                  <span className="font-semibold">Status:</span> {subscription.status === 'active' ? 'Active' : subscription.status}
                 </p>
               </div>
             ) : (

@@ -33,8 +33,9 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
   const fetchSubscription = async () => {
     try {
       const { data, error } = await supabase
-        .from('stripe_user_subscriptions')
+        .from('stripe_subscriptions')
         .select('*')
+        .eq('customer_id', (await supabase.from('stripe_customers').select('id').eq('user_id', user.id).single()).data?.id)
         .maybeSingle();
 
       if (error) {

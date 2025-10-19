@@ -12,8 +12,8 @@ export interface StripeProduct {
 
 export const stripeProducts: StripeProduct[] = [
   {
-    id: 'prod_standard',
-    priceId: 'price_standard_monthly', // Replace with your actual Stripe price ID
+    id: 'prod_TGUfoszjm9BsYU',
+    priceId: 'price_1SJxg6JIlAdaI081CUjqah3W',
     name: 'Inflow Standard Plan',
     description: 'All the Tools to Capture More Leads, Nurture & Close Leads into Customers, Full Online Booking, Pipelines, Social Cal, Website Builder, and More!',
     price: 59.99,
@@ -30,8 +30,8 @@ export const stripeProducts: StripeProduct[] = [
     ]
   },
   {
-    id: 'prod_premium',
-    priceId: 'price_premium_monthly', // Replace with your actual Stripe price ID
+    id: 'prod_TGUfULM4vFnW5B',
+    priceId: 'price_1SJxgMJIlAdaI081izIqOxVr',
     name: 'Inflow Premium Plan',
     description: 'Everything In Standard Plan, Api Access - Integrate with Anything, Unlimited Sub-Accounts - As Many Client Accounts as You Need for One Price!',
     price: 74.99,
