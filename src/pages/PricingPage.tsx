@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabaseClient';
 import { getStandardPlan, getPremiumPlan } from '../stripe-config';
-import { Check, Zap, Crown, Sparkles, Loader2 } from 'lucide-react';
+import { Check, Zap, Crown, Sparkles, Loader as Loader2 } from 'lucide-react';
 
 export default function PricingPage() {
   const { user } = useAuth();
