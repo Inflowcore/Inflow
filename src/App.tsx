@@ -13,6 +13,7 @@ import FeaturesPage from './pages/FeaturesPage';
 import FAQPage from './pages/FAQPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import SuccessPage from './pages/SuccessPage';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('home');
@@ -73,6 +74,14 @@ function App() {
     return (
       <AuthProvider>
         <SignupPage />
+      </AuthProvider>
+    );
+  }
+
+  if (window.location.pathname === '/success') {
+    return (
+      <AuthProvider>
+        <SuccessPage />
       </AuthProvider>
     );
   }

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Menu, X, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabaseClient';
+import { getProductByPriceId } from '../stripe-config';
 
 interface HeaderProps {
   currentPage?: string;
@@ -11,6 +13,7 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [lastScrollY, setLastScrollY] = useState(0);
+  const [subscription, setSubscription] = useState<any>(null);
   const { user, signOut } = useAuth();
 
   const navItems = [
@@ -20,6 +23,35 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
     { name: 'FAQs', key: 'faqs' },
     { name: 'Contact', key: 'contact' },
   ];
+
+  useEffect(() => {
+    if (user) {
+      fetchSubscription();
+    }
+  }, [user]);
+
+  const fetchSubscription = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('stripe_user_subscriptions')
+        .select('*')
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching subscription:', error);
+      } else {
+        setSubscription(data);
+      }
+    } catch (error) {
+      console.error('Error fetching subscription:', error);
+    }
+  };
+
+  const getSubscriptionDisplay = () => {
+    if (!subscription?.price_id) return null;
+    const product = getProductByPriceId(subscription.price_id);
+    return product?.name.replace('Inflow ', '') || 'Active Plan';
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -109,12 +141,19 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
             {/* Action Buttons */}
             <div className="flex items-center space-x-3 flex-shrink-0">
               {user ? (
-                <button
-                  onClick={handleAuthAction}
-                  className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white px-5 py-2 rounded-full font-medium text-sm transition-all duration-300 shadow-lg hover:shadow-pink-500/25"
-                >
-                  Sign Out
-                </button>
+                <div className="flex items-center space-x-3">
+                  {getSubscriptionDisplay() && (
+                    <span className="text-xs font-medium text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                      {getSubscriptionDisplay()}
+                    </span>
+                  )}
+                  <button
+                    onClick={handleAuthAction}
+                    className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white px-5 py-2 rounded-full font-medium text-sm transition-all duration-300 shadow-lg hover:shadow-pink-500/25"
+                  >
+                    Sign Out
+                  </button>
+                </div>
               ) : (
                 <>
                   <button
@@ -185,12 +224,21 @@ export default function Header({ currentPage = 'home', onNavigate }: HeaderProps
               
               <div className="border-t border-gray-200 pt-3 mt-3">
                 {user ? (
-                  <button
-                    onClick={handleAuthAction}
-                    className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white px-4 py-2 rounded-full font-medium text-sm transition-all duration-300 w-full shadow-lg hover:shadow-pink-500/25"
-                  >
-                    Sign Out
-                  </button>
+                  <div className="space-y-2">
+                    {getSubscriptionDisplay() && (
+                      <div className="text-center">
+                        <span className="text-xs font-medium text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                          {getSubscriptionDisplay()}
+                        </span>
+                      </div>
+                    )}
+                    <button
+                      onClick={handleAuthAction}
+                      className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white px-4 py-2 rounded-full font-medium text-sm transition-all duration-300 w-full shadow-lg hover:shadow-pink-500/25"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     <button
